@@ -1,29 +1,52 @@
-# For PCBs designed using KiCad: https://www.kicad.org/
-# Format documentation: https://kicad.org/help/file-formats/
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.~*
 
-# Temporary files
-*.000
-*.bak
-*.bck
+# KiCAD Files #
+###############
 *.kicad_pcb-bak
-*.kicad_sch-bak
-*-backups
-*.kicad_prl
 *.sch-bak
-*~
+*.bak
+*.xml
 _autosave-*
-*.tmp
-*-save.pro
-*-save.kicad_pcb
+*-cache.lib
 fp-info-cache
 
-# Netlist files (exported from Eeschema)
-*.net
+# KiCAD 6 Files #
+*-backups
+*.kicad_prl
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.~*
 
-# Autorouter files (exported from Pcbnew)
-*.dsn
-*.ses
-
-# Exported BOM files
+# KiCAD Files #
+###############
+*.kicad_pcb-bak
+*.sch-bak
+*.bak
 *.xml
-*.csv
+_autosave-*
+*-cache.lib
+fp-info-cache
+
+# KiCAD 6 Files #
+*-backups
+*.kicad_prl
+
+# Freecad files #
+#################
+*.FCStd1
