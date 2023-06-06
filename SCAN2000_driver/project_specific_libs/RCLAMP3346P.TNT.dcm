@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP RCLAMP3346P.TNT
+D ESD Suppressors / TVS Diodes RCLAMP3346P.TNT
+K
+F https://datasheet.datasheetarchive.com/originals/distributors/DKDS42/DSANUWW0050317.pdf
+$ENDCMP
+#
+#End Doc Library

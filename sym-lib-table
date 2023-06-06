@@ -1,4 +1,0 @@
-(sym_lib_table
-  (version 7)
-  (lib (name "RJHSE538004")(type "KiCad")(uri "${KIPRJMOD}/project_specific_libs/RJHSE538004.kicad_sym")(options "")(descr ""))
-)
