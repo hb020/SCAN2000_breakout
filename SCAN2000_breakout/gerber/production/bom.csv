@@ -1,7 +1,7 @@
 Designator,Footprint,Quantity,Value,LCSC Part #
 "J1, J11, J13, J15, J17, J19, J3, J5, J7, J9",CT2908-1,10,Banana socket,
 "J10, J12, J14, J16, J18, J2, J20, J4, J6, J8",CT2908-0,10,Banana socket,
-J21,IDC-Header_2x13_P2.54mm_Latch_Horizontal,1,Conn_01x26_HIGHin,
+J21,IDC-Header_2x13_P2.54mm_Latch_Horizontal,1,IDC-Header_2x13,
 J22,PinSocket_2x10_P2.54mm_Vertical,1,Conn_02x10_Odd_Even,
 "J23, J24","PhoenixContact_MSTBA_2,5_2-G-5,08_1x02_P5.08mm_Horizontal",2,Conn_01x02_Pin,
 "R1, R14",R_Shunt_Ohmite_LVK12_ALT2,2,0.05,
