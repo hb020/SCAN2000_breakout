@@ -1,0 +1,4 @@
+pyvisa
+pyvisa-py
+psutil
+zeroconf
