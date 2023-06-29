@@ -27,6 +27,10 @@ The board provides 20 channels:
 * 8 banana inputs for voltage measurements or 4W resistance measurements.
 * 10 pin header inputs for voltage measurements or 4W resistance measurements.
 
+# Calibration
+
+See the [/scan2000_calibrate](/scan2000_calibrate) directory for the determination of the multiplication factors for the voltage to current conversion on channels 1 and 11. Can be done simpler though.
+
 # Production
 
 The case chosen is a Hammond 1590QBK. It is just small enough to fit everything required inside, and not be a space hogger on my desk. It machines well, even on my rather low end CNC:
