@@ -45,7 +45,7 @@ The grounding of the case is done through a threaded rivet in the case that is c
 # TODO
 
 * Integrate the mezzanine board in the SCAN2000 board. But then I should also replace the ESD diodes by a real overvoltage protection. The used diodes are effective against some types of ESD, but get damaged easily with DC currents. And hand soldering them isn't easy.
-* Find a black 26 pin flat cable header, the white ones I got now hurts the eyes.
+* Find a black 26 pin flat cable header, the white one I got now hurts the eyes.
 * Use nicer connectors than the MSTB 5.08 connectors. The OUT/SENSE cables that I used to connect to the DMM are shielded, making them just a bit stiff, so I had to use MSTB 2,5/ 2-STZ-5,08 connectors that have strain relief. It would be better to move to a regular 4 or 5 pin connector.
 * Make a 3D printed case for the rearconn connector. I just applied plastic coating to the PCB, not ideal.
 
