@@ -18,7 +18,7 @@ DEBUG = False
 
 # SCPI Addresses:
 # Current source: USB, prologix USB-GPIB, address 1. Hence: not via pyvisa, as that is not stable for that adapter.
-ADDR_SOURCE = "/dev/cu.usbmodem1401"
+ADDR_SOURCE = "/dev/cu.usbmodem21401"
 ADDR_SOURCE_SUBADDR = "1"
 AUTOREAD = False
 SERIAL_TIMEOUT = 0.1
@@ -150,6 +150,15 @@ def inst_cm_init(rm):
     return True
 
 
+def getCurrent():
+    global inst_cm
+    s = inst_cm.query("READ?").strip()
+    f = float(s)
+    s = inst_cm.query("CURR:DC:RANG?")
+    r = float(s)
+    return f, r
+
+
 def inst_target_init(rm):
     global inst_target
     inst_target = rm.open_resource(ADDR_TARGET)
@@ -163,7 +172,7 @@ def inst_target_init(rm):
         inst_target.timeout = 10000
 
     inst_target.write("*CLS")
-    
+
     # check ID
     s = inst_target.query("*IDN?").strip()
     if "DMM6500" not in s:
@@ -181,7 +190,7 @@ def inst_target_init(rm):
     else:
         inst_target.write(f"VOLT:DC:AVER:COUNT {avg_filter}, (@1,11)")
         inst_target.write("VOLT:DC:AVER:TCON REP, (@1,11)")
-        inst_target.write("VOLT:DC:AVER 1, (@1,11)")
+        inst_target.write("VOLT:DC:AVER:STAT 1, (@1,11)")
 
     # TODO: this does not seem to work, even with SCPI syntax errors I get through
     s = inst_cm.query("SYST:ERR?").strip()
@@ -195,11 +204,31 @@ def getTargetCh(ch):
     global inst_target
 
     # TODO: in rare cases, wildly off measurements get through. Check that.
+    inst_target.write("ABOR")
+    inst_target.write("ROUT:OPEN:ALL")
     inst_target.write(f"ROUT:CLOS (@{ch})")
-    s = inst_target.query("READ?").strip()
+    s = inst_target.query('READ? "defbuffer1", READ, CHAN, STAT').strip()
+    r = float(inst_target.query("VOLT:DC:RANG?"))
     inst_target.write(f"ROUT:OPEN (@{ch})")
-    f = float(s)
-    return f
+    inst_target.write("ROUT:OPEN:ALL")
+
+    l = s.split(",")
+    if len(l) != 3:
+        print(f'ERROR reading from channel {ch}, reply = "{s}"')
+        return None, r
+    try:
+        if int(l[1]) != int(ch):
+            print(f"ERROR reading from channel {ch}, got reply from channel {l[1]}")
+            return None, r
+        if int(l[2]) != 0:
+            print(f"ERROR reading from channel {ch}, got status code {l[2]}")
+            return None, r
+    except:
+        print(f'ERROR reading from channel {ch}, reply = "{s}"')
+        return None, r
+
+    f = float(l[0])
+    return f, r
 
 
 def initMeasurements():
@@ -232,20 +261,15 @@ def setCurrent(val, oldval=None):
     time.sleep(sleeptime_s)
 
 
-def getCurrent():
-    global inst_cm
-    s = inst_cm.query("READ?").strip()
-    f = float(s)
-    return f
-
-
 def format_float(val):
     return f"{val:+.8f}".replace(".", ",")
 
 
-def initDevices():
+def readDevices(test):
     global inst_cm
     global inst_target
+
+    print(f"Using NPLC {NPLC_MAX_TARGET}")
 
     rm = visa.ResourceManager()
     if DEBUG:
@@ -266,17 +290,21 @@ def initDevices():
 
     print("Creating values")
 
-    vals = [CURRENT_MAX, CURRENT_MAX * -1]
-    v = 0
-    while v < CURRENT_MAX:
-        vals.append(v)
-        vals.append(-1 * v)
-        s = v * CURRENT_STEPS_PERC / 100
-        if s < CURRENT_RESOLUTION:
-            s = CURRENT_RESOLUTION
-        v += s
+    if test:
+        # DEBUG: force a short test
+        vals = [0.0085]
+    else:
+        vals = [CURRENT_MAX, CURRENT_MAX * -1]
+        v = 0
+        while v < CURRENT_MAX:
+            vals.append(v)
+            vals.append(-1 * v)
+            s = v * CURRENT_STEPS_PERC / 100
+            if s < CURRENT_RESOLUTION:
+                s = CURRENT_RESOLUTION
+            v += s
 
-    vals.sort()
+        vals.sort()
 
     print(f"Measuring over {len(vals)} values.")
 
@@ -292,14 +320,14 @@ def initDevices():
             "abs_actual",
             "m_ch1",
             "m_ch11",
+            "ch1_range",
+            "ch11_range",
+            "curr_range",
         ]
         csvwriter = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=";")
         csvwriter.writeheader()
 
         initMeasurements()
-
-        # DEBUG: force a short test
-        # vals = [0.0085]
 
         my_max = len(vals)
         oldval = None
@@ -312,20 +340,32 @@ def initDevices():
             setCurrent(v, oldval)
             oldval = v
 
-            f = getCurrent()
-            ch1 = getTargetCh(1)
-            ch11 = getTargetCh(11)
+            f, ir = getCurrent()
+            ch1, r1 = getTargetCh(1)
+            ch11, r11 = getTargetCh(11)
 
             d["actual"] = format_float(f)
-            d["ch1"] = format_float(ch1)
-            d["ch11"] = format_float(ch11)
             d["abs_actual"] = format_float(abs(f))
-            d["m_ch1"] = format_float(f / ch1)
-            d["m_ch11"] = format_float(f / ch11)
+            d["curr_range"] = format_float(ir)
+            d["ch1_range"] = format_float(r1)
+            d["ch11_range"] = format_float(r11)
+            if ch1 is not None:
+                d["ch1"] = format_float(ch1)
+                d["m_ch1"] = format_float(f / ch1)
+            else:
+                d["ch1"] = ""
+                d["m_ch1"] = ""
+            if ch11 is not None:
+                d["ch11"] = format_float(ch11)
+                d["m_ch11"] = format_float(f / ch11)
+            else:
+                d["ch11"] = ""
+                d["m_ch11"] = ""
             csvwriter.writerow(d)
 
         closeMeasurements()
 
 
 if __name__ == "__main__":
-    initDevices()
+    # set param to True to force a short test
+    readDevices(False)
