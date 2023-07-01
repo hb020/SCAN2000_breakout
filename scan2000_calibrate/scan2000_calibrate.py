@@ -23,7 +23,7 @@ ADDR_SOURCE_SUBADDR = "1"
 AUTOREAD = False
 SERIAL_TIMEOUT = 0.1
 # Current measurement:
-ADDR_CURRENTMEAURE = "TCPIP::192.168.7.201::INSTR"
+ADDR_CURRENTMEASURE = "TCPIP::192.168.7.201::INSTR"
 NPLC_MAX_CURRENTMEASURE = 100
 # Target
 ADDR_TARGET = "TCPIP::192.168.7.205::INSTR"
@@ -121,7 +121,7 @@ def inst_cs_init():
 
 def inst_cm_init(rm):
     global inst_cm
-    inst_cm = rm.open_resource(ADDR_CURRENTMEAURE)
+    inst_cm = rm.open_resource(ADDR_CURRENTMEASURE)
 
     nplc = MEASUREMENT_NPLC
     if nplc > NPLC_MAX_CURRENTMEASURE:
