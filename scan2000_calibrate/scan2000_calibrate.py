@@ -192,9 +192,8 @@ def inst_target_init(rm):
         inst_target.write("VOLT:DC:AVER:TCON REP, (@1,11)")
         inst_target.write("VOLT:DC:AVER:STAT 1, (@1,11)")
 
-    # TODO: this does not seem to work, even with SCPI syntax errors I get through
-    s = inst_cm.query("SYST:ERR?").strip()
-    if not s.startswith("+0"):
+    s = inst_target.query("SYST:ERR?").strip()
+    if not s.startswith("0,\"No error"):
         print(f'ERROR during init: "{s}"')
         return False
     return True
