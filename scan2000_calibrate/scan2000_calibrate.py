@@ -4,6 +4,9 @@
 # Current measurement: K34465A
 # Target: DMM6500 with SCAN2000-20, with shunts on channels 1 and 11
 
+# TODO: sync the current measurements. Right now the results are noisy in low amps because the current source is noisy.
+# TODO: do measurements with a 4 Quadrant enabled HP 6634B, as that has better low current behaviour
+
 import pyvisa as visa
 import serial
 import time
