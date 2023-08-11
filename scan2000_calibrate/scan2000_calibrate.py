@@ -1,8 +1,32 @@
 # SCAN2000 shunt linearity measurement
 # via SCPI
 # Current source: 4 Quadrant enabled HP 66332A (option 760, relay board)
-# Current measurement: K34465A
+# Current measurement/Calibrator: K34465A. Must have done a fresh ACAL before!
 # Target: DMM6500 with SCAN2000-20, with shunts on channels 1 and 11
+
+# How to use: connect the current source on the series connection of the current 
+# measurement device + CH1 + CH11.
+# This script walks through a range of current values, and measures the "real" current 
+# and compares that to the voltage reading in the channels 1 and 11
+# As the current source is somewhat noisy, it measures the current and the voltage simultaneously, and for the same duration.
+# Since I cannot read channel 1 and 11 at the same time, I must do 2 measurement sets per current level set:
+# one for channel 1, and one for channel 11.
+#
+# The result is a CSV file with (current in A, Voltage in V):
+# "nr": line/test sequence number
+# "set" the set current
+# "actual1": current read while measuring channel 1 
+# "actual11": current read while measuring channel 11 
+# "ch1": voltage on channel 1
+# "ch11": voltage on channel 11
+# "avg_actual": average current read
+# "abs_actual": average current read, absolute value
+# "m_ch1": multiplication factor CH1: actual1/ch1
+# "m_ch11": multiplication factor CH11: actual11/ch11
+# "ch_range" range while reading voltage on ch1 and ch11. In case of a difference between the 2 measurements: average of the 2.
+# "curr_range": range while reading current. In case of a difference between the 2 measurements: average of the 2.
+#
+# TODO: This script is robust against the/my? DMM6500's tendency to sometimes lose a command.
 
 # TODO: sync the current measurements. Right now the results are noisy in low amps because the current source is noisy.
 # TODO: do measurements with a 4 Quadrant enabled HP 6634B, as that has better low current behaviour
@@ -21,16 +45,27 @@ DEBUG = False
 
 # SCPI Addresses:
 # Current source: USB, prologix USB-GPIB, address 1. Hence: not via pyvisa, as that is not stable for that adapter.
-ADDR_SOURCE = "/dev/cu.usbmodem21401"
+ADDR_SOURCE = "/dev/cu.usbmodem31401"
 ADDR_SOURCE_SUBADDR = "1"
 AUTOREAD = False
 SERIAL_TIMEOUT = 0.1
-# Current measurement:
-ADDR_CURRENTMEASURE = "TCPIP::192.168.7.201::INSTR"
-NPLC_MAX_CURRENTMEASURE = 100
+# Calibrator:
+ADDR_CALIBRATOR = "TCPIP::192.168.7.201::INSTR"
+NPLC_MAX_CALIBRATOR = 100
+# MEASUREMENT_TYPE_CALIBRATOR = "VOLT:DC"
+MEASUREMENT_TYPE_CALIBRATOR = "CURR:DC"
+# do autorange on calibrator. That clicks a lot.
+AUTORANGE_CAL = False
+
 # Target
 ADDR_TARGET = "TCPIP::192.168.7.205::INSTR"
 NPLC_MAX_TARGET = 10
+
+# Switching off auto zero improves timing alignment of the measurements A LOT. It however introduces long term drift.
+# So when using a noisy current source, do not do AZERO
+AZERO = False
+# Display OFF slightly improves speed
+DISPLAY_OFF = False
 
 OUTFILE = "out.csv"
 
@@ -38,10 +73,10 @@ OUTFILE = "out.csv"
 CURRENT_MAX = 2
 # go 5% steps up. Easy way to get a close to logarithmic test.
 CURRENT_STEPS_PERC = 5
-# the HP 66332A only has 1mA resolution with about 0.5mA error margin.
-CURRENT_RESOLUTION = 0.0005
+# the HP 66332A only has 2mA programming accuracy with about 0.5mA error margin.
+CURRENT_RESOLUTION = 0.001
 
-# make sure you use valid values, for all devices.
+# Set the aperture (expressed in PLC). Must be 1..NPLC_MAX_CALIBRATOR
 MEASUREMENT_NPLC = 10
 
 
@@ -122,55 +157,130 @@ def inst_cs_init():
     return True
 
 
-def inst_cm_init(rm):
-    global inst_cm
-    inst_cm = rm.open_resource(ADDR_CURRENTMEASURE)
+def inst_cs_close():
+    inst_cs_write("OUTP 0")
+    inst_cs_write("OUTP:REL:POL NORM")
+    inst_cs_write("SOUR:VOLT 0")
+    inst_cs_write("SOUR:CURR 0")
 
-    nplc = MEASUREMENT_NPLC
-    if nplc > NPLC_MAX_CURRENTMEASURE:
-        nplc = NPLC_MAX_CURRENTMEASURE
 
-    if nplc > 10:
+def inst_cal_init(rm):
+    """Init the device
+
+    Args:
+        rm (ResourceManager): the global resource manager
+
+    Returns:
+        Boolean: success
+    """
+    global inst_cal
+    inst_cal = rm.open_resource(ADDR_CALIBRATOR)
+
+    if MEASUREMENT_NPLC > 10:
         # in ms
-        inst_cm.timeout = 10000
+        inst_cal.timeout = 10000
 
-    inst_cm.write("*CLS")
+    inst_cal.write("*CLS")
     # check ID
-    s = inst_cm.query("*IDN?").strip()
+    s = inst_cal.query("*IDN?").strip()
     if "34465A" not in s:
         print(f'ERROR: device ID is unexpected: "{s}"')
         return False
 
-    # set to current measurement, 3A range, auto
-    inst_cm.write("CONF:CURR:DC AUTO")
-    inst_cm.write("SENS:CURR:DC:TERM 3")
-    inst_cm.write(f"SENS:CURR:DC:NPLC {nplc}")
+    # set to overall config
+    inst_cal.write(f"CONF:{MEASUREMENT_TYPE_CALIBRATOR} AUTO")
 
-    s = inst_cm.query("SYST:ERR?").strip()
+    # improve for fast use:
+    if DISPLAY_OFF:
+        inst_cal.write("DISP OFF")
+
+    s = inst_cal.query("SYST:ERR?").strip()
     if not s.startswith("+0"):
         print(f'ERROR during init: "{s}"')
         return False
     return True
 
 
-def getCurrent():
-    global inst_cm
-    s = inst_cm.query("READ?").strip()
+def prepareMeasurement_inst_cal(range=None):
+    """Prepare the measurement
+
+    Args:
+        range (String, optional): range to be set. When None: set to auto range. Defaults to None.
+
+    Returns:
+        String: the command to be sent to start the measurement
+    """
+    global inst_cal
+    
+    nplc = min(MEASUREMENT_NPLC, NPLC_MAX_CALIBRATOR)
+
+    if range is None:
+        nplc = 1
+        range = "AUTO"
+        
+    inst_cal.write(f"CONF:{MEASUREMENT_TYPE_CALIBRATOR} {range}")  # This messes up all of the below. So set it
+    if "CURR" in MEASUREMENT_TYPE_CALIBRATOR:
+        inst_cal.write("SENS:CURR:DC:TERM 3")
+    inst_cal.write(f"SENS:{MEASUREMENT_TYPE_CALIBRATOR}:NPLC {nplc}")
+    if AZERO:
+        s = "ON"
+    else:
+        s = "OFF"
+    inst_cal.write(f"SENS:{MEASUREMENT_TYPE_CALIBRATOR}:ZERO:AUTO {s}")
+
+    s = inst_cal.query("SYST:ERR?").strip()
+    if not s.startswith("+0"):
+        print(f'ERROR during prepareMeasurement: "{s}"')
+        return None
+                    
+    # trigger options:
+    # 1) TRIG:SOUR IMM ; INIT
+    # 2) TRIG:SOUR BUS ; INIT ; *TRG
+    inst_cal.write("TRIG:SOUR BUS")
+    inst_cal.write("INIT")
+    return "*TRG"
+    
+
+def getMeasurement_inst_cal():
+    """Get the measurement values
+    
+    Returns:
+        float,str: value read, range used
+    """
+    global inst_cal
+    
+    inst_cal.write("*WAI")
+    s = inst_cal.query("FETCH?").strip()
     f = float(s)
-    s = inst_cm.query("CURR:DC:RANG?")
-    r = float(s)
+    s = inst_cal.query(f"{MEASUREMENT_TYPE_CALIBRATOR}:RANG?")
+    r = str(float(s))  # make it a simplified version. I tend to get stuff back like "+1.00000000E-01". Make it "0.1"
     return f, r
 
 
-def inst_target_init(rm):
+def inst_cal_close():
+    inst_cal.write("DISP ON")
+    inst_cal.write("SYST:LOCal")
+
+
+def inst_target_init(rm, channels=None):
+    """Init the device
+
+    Args:
+        rm (ResourceManager): the global resource manager
+        channels (string, optional): list of channels to use. None = front panel only. Defaults to None.
+
+    Returns:
+        Boolean: success
+    """
+
     global inst_target
     inst_target = rm.open_resource(ADDR_TARGET)
-
-    nplc = MEASUREMENT_NPLC
-    avg_filter = 1
-    if nplc > NPLC_MAX_TARGET:
-        nplc = NPLC_MAX_TARGET
-        avg_filter = MEASUREMENT_NPLC / NPLC_MAX_TARGET
+    
+    sChannels = ""
+    if channels is not None and len(channels) > 0:
+        sChannels = ", (@" + channels + ")"
+        
+    if MEASUREMENT_NPLC > 10:
         # in ms
         inst_target.timeout = 10000
 
@@ -182,19 +292,21 @@ def inst_target_init(rm):
         print(f'ERROR: device ID is unexpected: "{s}"')
         return False
 
-    # set to voltage measurement, inputs 1 and 11
-    inst_target.write("SENS:FUNC 'VOLT', (@1,11)")
-    inst_target.write(f"SENS:VOLT:NPLC {nplc}, (@1,11)")
-    inst_target.write("VOLT:DC:RANG:AUTO 1, (@1,11)")
-    inst_target.write("VOLT:DC:INP AUTO, (@1,11)")
-    inst_target.write("VOLT:DC:LINE:SYNC 1, (@1,11)")
-    if avg_filter <= 1:
-        inst_target.write("VOLT:DC:AVER 0, (@1,11)")
+    # set to voltage measurement
+    inst_target.write("SENS:FUNC 'VOLT'" + sChannels)
+    inst_target.write("VOLT:DC:RANG:AUTO 1" + sChannels)
+    inst_target.write("VOLT:DC:INP AUTO" + sChannels)
+    inst_target.write("VOLT:DC:LINE:SYNC 0" + sChannels)
+    if AZERO:
+        s = "1"
     else:
-        inst_target.write(f"VOLT:DC:AVER:COUNT {avg_filter}, (@1,11)")
-        inst_target.write("VOLT:DC:AVER:TCON REP, (@1,11)")
-        inst_target.write("VOLT:DC:AVER:STAT 1, (@1,11)")
-
+        s = "0"
+    inst_target.write(f"VOLT:DC:AZER {s}" + sChannels)
+    
+    # improve for fast use:
+    if DISPLAY_OFF:
+        inst_target.write("DISP:SCR PROC")
+    
     s = inst_target.query("SYST:ERR?").strip()
     if not s.startswith("0,\"No error"):
         print(f'ERROR during init: "{s}"')
@@ -202,48 +314,152 @@ def inst_target_init(rm):
     return True
 
 
-def getTargetCh(ch):
+def prepareMeasurement_inst_target(ch=0, range=None):
+    """Prepare the measurement
+
+    Args:
+        ch (int, optional): Channel to be used. 0 = front panel. Defaults to 0.
+        range (String, optional): range to be set. When None: set to auto range. Defaults to None.
+
+    Returns:
+        String: the command to be sent to start the measurement
+    """
+    global inst_target
+    # TODO: in rare cases, wildly off measurements get through. Check that.
+    
+    sChannel = ""
+    if ch != 0:
+        sChannel = f", (@{ch})"
+            
+    inst_target.write("ABOR")
+    if ch != 0:
+        inst_target.write("ROUT:OPEN:ALL")
+        inst_target.write(f"ROUT:CLOS (@{ch})")  # without a comma, so directly
+        
+    nplc = MEASUREMENT_NPLC
+    
+    if range is None:
+        nplc = 1
+        inst_target.write("VOLT:DC:RANG:AUTO 1" + sChannel)
+    else:
+        inst_target.write("VOLT:DC:RANG " + range + sChannel)
+        
+    avg_filter = 1
+    if nplc > NPLC_MAX_TARGET:
+        nplc = NPLC_MAX_TARGET
+        avg_filter = MEASUREMENT_NPLC / NPLC_MAX_TARGET
+    
+    inst_target.write(f"SENS:VOLT:NPLC {nplc}" + sChannel)
+    
+    if avg_filter <= 1:
+        inst_target.write("VOLT:DC:AVER 0" + sChannel)
+    else:
+        inst_target.write(f"VOLT:DC:AVER:COUNT {avg_filter}" + sChannel)
+        inst_target.write("VOLT:DC:AVER:TCON REP" + sChannel)
+        inst_target.write("VOLT:DC:AVER:STAT 1" + sChannel)
+
+    s = inst_target.query("SYST:ERR?").strip()
+    if not s.startswith("0,\"No error"):
+        print(f'ERROR during prepareMeasurement: "{s}"')
+        return None
+
+    # trigger options:
+    # 1) TRIG:LOAD "SimpleLoop", 1 ; INIT
+    # .. haven't found a way to use *TRG
+    
+    # set for immediate trigger
+    inst_target.write("TRIG:LOAD \"SimpleLoop\", 1")    
+    return "INIT"
+
+
+def getMeasurement_inst_target(ch=0):
+    """Get the measurement values
+
+    Args:
+        ch (int, optional): Channel to be used. 0 = front panel. Defaults to 0.
+        
+    Returns:
+        float,str: value read, range used
+    """
     global inst_target
 
-    # TODO: in rare cases, wildly off measurements get through. Check that.
-    inst_target.write("ABOR")
-    inst_target.write("ROUT:OPEN:ALL")
-    inst_target.write(f"ROUT:CLOS (@{ch})")
-    s = inst_target.query('READ? "defbuffer1", READ, CHAN, STAT').strip()
-    r = float(inst_target.query("VOLT:DC:RANG?"))
-    inst_target.write(f"ROUT:OPEN (@{ch})")
-    inst_target.write("ROUT:OPEN:ALL")
+    inst_target.write("*WAI")
+    s = inst_target.query('FETCH? "defbuffer1", READ, CHAN, STAT').strip()
+    r = inst_target.query("VOLT:DC:RANG?").strip()  # this will be a nice short string
+    if ch != 0:
+        inst_target.write(f"ROUT:OPEN (@{ch})")
+        inst_target.write("ROUT:OPEN:ALL")
 
-    l = s.split(",")
-    if len(l) != 3:
+    ls = s.split(",")
+    if len(ls) != 3:
         print(f'ERROR reading from channel {ch}, reply = "{s}"')
         return None, r
+
     try:
-        if int(l[1]) != int(ch):
-            print(f"ERROR reading from channel {ch}, got reply from channel {l[1]}")
-            return None, r
-        if int(l[2]) != 0:
-            print(f"ERROR reading from channel {ch}, got status code {l[2]}")
+        if ch != 0:
+            if int(ls[1]) != int(ch):
+                print(f"ERROR reading from channel {ch}, got reply from channel {ls[1]}")
+                return None, r
+        if int(ls[2]) not in [0, 8]:
+            print(f"ERROR reading from channel {ch}, got status code {ls[2]}")
             return None, r
     except:
         print(f'ERROR reading from channel {ch}, reply = "{s}"')
         return None, r
 
-    f = float(l[0])
+    f = float(ls[0])
     return f, r
+
+
+def inst_target_close():
+    inst_target.write("DISP:SCR HOME")
 
 
 def initMeasurements():
     inst_cs_write("OUTP 1")
     # let CC mode activate
     time.sleep(1)
-
+    
 
 def closeMeasurements():
-    inst_cs_write("OUTP 0")
-    inst_cs_write("OUTP:REL:POL NORM")
-    inst_cs_write("SOUR:VOLT 0")
-    inst_cs_write("SOUR:CURR 0")
+    inst_cs_close()
+    inst_cal_close()
+    inst_target_close()
+    
+    
+def getMeasurement(ch=0, rc=None, rt=None):
+    """ get a measurement that is synced in time between the calibrator and the target
+
+    Args:
+        ch (int, optional): Channel to be used. 0 = front panel. Defaults to 0.
+        rc (str, optional): calibrator range to be set. When None: set to auto range. Defaults to None.
+        rc (str, optional): target range to be set. When None: set to auto range. Defaults to None.
+
+    Returns:
+        float, str, float, str: cal value, cal range, target value, target range
+    """
+    skip_rc = (rc is not None) and (rt is None)
+
+    # prepare
+    if not skip_rc:
+        cmdTriggerC = prepareMeasurement_inst_cal(rc)
+    cmdTriggerT = prepareMeasurement_inst_target(ch, rt)
+    
+    # trigger together
+    # t1 = time.perf_counter()
+    if not skip_rc:
+        inst_cal.write(cmdTriggerC)
+    inst_target.write(cmdTriggerT)
+    # t2 = time.perf_counter()
+    # print(f"total trigger time: {int((t2-t1)*1000)}ms")
+
+    # read results
+    if not skip_rc:
+        fc, rc = getMeasurement_inst_cal()
+    else:
+        fc = None
+    ft, rt = getMeasurement_inst_target()
+    return fc, rc, ft, rt
 
 
 # sets the current, and lets the PSU settle some time. This PSU has a tendency to take time to go to CC mode.
@@ -280,12 +496,12 @@ def readDevices(test):
     if not inst_cs_init():
         return 1
 
-    print("Opening current measurement.")
-    if not inst_cm_init(rm):
+    print("Opening calibrator.")
+    if not inst_cal_init(rm):
         return 1
 
     print("Opening target.")
-    if not inst_target_init(rm):
+    if not inst_target_init(rm, "1,11"):
         return 1
 
     print("Init OK")
@@ -297,7 +513,7 @@ def readDevices(test):
         vals = [0.0085]
     else:
         vals = [CURRENT_MAX, CURRENT_MAX * -1]
-        v = 0
+        v = CURRENT_RESOLUTION
         while v < CURRENT_MAX:
             vals.append(v)
             vals.append(-1 * v)
@@ -316,16 +532,18 @@ def readDevices(test):
         fieldnames = [
             "nr",
             "set",
-            "actual",
+            "actual1",
+            "actual11",
             "ch1",
             "ch11",
+            "avg_actual",
             "abs_actual",
             "m_ch1",
             "m_ch11",
-            "ch1_range",
-            "ch11_range",
+            "ch_range",
             "curr_range",
         ]
+                
         csvwriter = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=";")
         csvwriter.writeheader()
 
@@ -342,24 +560,53 @@ def readDevices(test):
             setCurrent(v, oldval)
             oldval = v
 
-            f, ir = getCurrent()
-            ch1, r1 = getTargetCh(1)
-            ch11, r11 = getTargetCh(11)
+            rc = None
+            w = abs(float(v))
+            if not AUTORANGE_CAL:
+                # TODO make this configurable: even at 0, the current = 1.3mA, so 1mA range will not do.
+#                if w <= 0.001:
+#                    rc = 0.001
+#                elif w <= 0.01:
+                if w <= 0.01:
+                    rc = 0.01
+                elif w <= 0.1:
+                    rc = 0.1
+                elif w <= 1:
+                    rc = 1
+                else:
+                    rc = 3
+            # do autorange via a short test
+            fc1, rc, ft1, rt = getMeasurement(1, rc, None)
+            # fc1 and ft1 are ignored here. They will be read below.
+            
+            
+            # use the range values found above for the 2 channels
+            fc1, rc1, ft1, rt1 = getMeasurement(1, rc, rt)
+            fc11, rc11, ft11, rt11 = getMeasurement(11, rc, rt)
 
-            d["actual"] = format_float(f)
-            d["abs_actual"] = format_float(abs(f))
-            d["curr_range"] = format_float(ir)
-            d["ch1_range"] = format_float(r1)
-            d["ch11_range"] = format_float(r11)
-            if ch1 is not None:
-                d["ch1"] = format_float(ch1)
-                d["m_ch1"] = format_float(f / ch1)
+            d["actual1"] = format_float(fc1)
+            d["actual11"] = format_float(fc11)
+            if fc1 is None or fc11 is None:
+                avg_actual = None
+            else:
+                avg_actual = (fc1 + fc11) / 2
+            d["avg_actual"] = format_float(avg_actual)
+            d["abs_actual"] = format_float(abs(avg_actual))
+
+            current_range = (float(rc1) + float(rc11)) / 2
+            d["curr_range"] = format_float(current_range)
+            ch_range = (float(rt1) + float(rt11)) / 2
+            d["ch_range"] = format_float(ch_range)
+            
+            if ft1 is not None:
+                d["ch1"] = format_float(ft1)
+                d["m_ch1"] = format_float(fc1 / ft1)
             else:
                 d["ch1"] = ""
                 d["m_ch1"] = ""
-            if ch11 is not None:
-                d["ch11"] = format_float(ch11)
-                d["m_ch11"] = format_float(f / ch11)
+            if ft11 is not None:
+                d["ch11"] = format_float(ft11)
+                d["m_ch11"] = format_float(fc11 / ft11)
             else:
                 d["ch11"] = ""
                 d["m_ch11"] = ""
