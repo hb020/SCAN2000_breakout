@@ -1,6 +1,6 @@
 # SCAN2000_breakout
 
-This repository contains the KiCAD and Freecad project files for a breakout panel for for a Keithley SCAN2000-20 replacement card. 
+This repository contains the KiCAD and Freecad project files for a breakout panel for for a Keithley SCAN2000-20 replacement card.
 
 It is a specific breakout board in the sense that it holds the (solid-state) relays inside, lowering the overal electrical noise.
 
@@ -31,6 +31,8 @@ The board provides 20 channels:
 
 See the [/scan2000_calibrate](/scan2000_calibrate) directory for the determination of the multiplication factors for the voltage to current conversion on channels 1 and 11. Can be done simpler though.
 
+A sample TSP file is [here](breakoutAmps.tsp). You may want to add that to your autoexec script.
+
 # Production
 
 The case chosen is a Hammond 1590QBK. It is just small enough to fit everything required inside, and not be a space hogger on my desk. It machines well, even on my rather low end CNC:
@@ -48,4 +50,3 @@ The grounding of the case is done through a threaded rivet in the case that is c
 * Find a black 26 pin flat cable header, the white one I got now hurts the eyes.
 * Use nicer connectors than the MSTB 5.08 connectors. The OUT/SENSE cables that I used to connect to the DMM are shielded, making them just a bit stiff, so I had to use MSTB 2,5/ 2-STZ-5,08 connectors that have strain relief. It would be better to move to a regular 4 or 5 pin connector.
 * Make a 3D printed case for the rearconn connector. I just applied plastic coating to the PCB, not ideal.
-
